@@ -5,9 +5,11 @@ GitHub Actionsで毎日実行し、Cloudflare KVに保存
 
 機能:
 1. 過去キーワードの継承（KVから取得）
-2. Google Trends/Naver急上昇ワードの自動検出
+2. 複数ソースからの新規キーワード取得（Google Trends、Naver等）
 3. 世代判定によるキーワード分類
-4. スコアベースの自然な新陳代謝（低スコアは脱落、高スコアは継続）
+4. スコアベースの自然な新陳代謝（ランキング下位は脱落）
+5. 新規キーワードも事前スコア計算（低スコアは次回脱落）
+6. ランダム探索による埋もれたキーワードの発掘
 """
 
 import os
@@ -18,6 +20,7 @@ import time
 from datetime import datetime, timedelta
 import ssl
 import re
+import random
 
 # 環境変数から設定を取得
 CF_API_TOKEN = os.environ.get('CF_API_TOKEN') or "HPQFIKr1hszgJckPLBzdBaR5g00ePOGV2b6ojO5U"
@@ -33,6 +36,7 @@ ssl_context.verify_mode = ssl.CERT_NONE
 MAX_KEYWORDS_PER_GEN = 50  # 各世代の最大キーワード数
 MAX_INHERITED_KEYWORDS = 40  # 継承キーワードの最大数（上位40件のみ継承、下位は脱落）
 MAX_NEW_TRENDS_PER_GEN = 20  # 各世代に追加する新規トレンドの最大数
+RANDOM_EXPLORE_COUNT = 5  # ランダム探索で試すキーワード数
 HISTORY_DAYS_TO_KEEP = 30  # 保持する履歴日数
 
 # シードキーワード（初回実行時または前回データが少ない場合に使用）
@@ -40,6 +44,51 @@ SEED_KEYWORDS = {
     'genz': ['틱톡', '유튜브', '원신', '발로란트', 'BTS', '뉴진스', 'ChatGPT', 'MBTI', '당근마켓', '아이돌'],
     'millennial': ['주식', '이직', '부동산', '육아', '넷플릭스', '부업', '재테크', '헬스', '아파트', '투자'],
     'genx': ['입시', '수능', '건강검진', '연금', '상속', '대입', '암검진', '교육비', '요양원', '당뇨']
+}
+
+# ランダム探索プール（埋もれている可能性のあるキーワード）
+EXPLORE_POOL = {
+    'genz': [
+        # ゲーム
+        '젠레스존제로', '학원아이돌마스터', '우마무스메', '프로세카', 'FGO',
+        '붕괴스타레일', '명일방주', '포트나이트', '마인크래프트', '동물의숲',
+        # 配信・SNS
+        '이세계아이돌', '고세구', '주르르', '징버거', '우왁굳', '침착맨', '대도서관',
+        '피식대학', '숏박스', '침투부',
+        # 音楽・エンタメ
+        '르세라핌', '스테이씨', '잇지', '엔시티', '세븐틴', '스트레이키즈',
+        '아이유', '태연', '백현', '임영웅', '이무진', '아이들',
+        # ファッション・トレンド
+        'Y2K패션', '산리오', '포차코', '시나모롤', '테무', '알리익스프레스',
+        # 学習・キャリア
+        '노션', '웹디자인', '영상편집', '캔바', '토익', '파이썬', '개발자'
+    ],
+    'millennial': [
+        # 投資・資産
+        'ISA', 'IRP', 'S&P500', 'ETF', '배당주', '미국주식',
+        '토스증권', '카카오증권', 'KB증권', '삼성증권',
+        # 副業・キャリア
+        '리셀', '블로그수익', '유튜브수익', '크몽', '클래스101',
+        # 生活・家族
+        '식기세척기', '건조기', '로봇청소기', '에어프라이어', '시간절약',
+        '웅진씽크빅', '눈높이', '밀크티', '엘리하이',
+        # 健康・美容
+        '애니타임', '스포애니', '짐박스', '홈트', '간헐적단식',
+        '오토파지', '프로틴', '피부과', '레이저', '보톡스'
+    ],
+    'genx': [
+        # 教育
+        '대성마이맥', '메가스터디', '이투스', 'EBS', '수시', '정시',
+        '스카이', '인서울', '의대입시', '자사고',
+        # 健康・医療
+        'PET검사', 'MRI', '위내시경', '대장내시경', '전립선암', '유방암검진',
+        '녹내장', '백내장수술', '노안수술', '라식', '라섹',
+        # 資産・相続
+        '상속세', '증여세', '가족신탁', '후견인', '부동산상속',
+        '종신보험', '연금보험', '실비보험',
+        # 介護
+        '장기요양등급', '지역포괄케어', '방문간호', '주야간보호'
+    ]
 }
 
 # 世代判定パターン（韓国版）
@@ -140,7 +189,7 @@ def get_previous_keywords_from_kv(gen):
 
 def fetch_google_trends_kr():
     """Google Trendsから韓国の急上昇ワードを取得"""
-    print("\n  Google Trends (韓国) から急上昇ワードを取得中...")
+    print("\n  [1/3] Google Trends (韓国) から急上昇ワードを取得中...")
 
     trends = []
 
@@ -163,24 +212,90 @@ def fetch_google_trends_kr():
 
             time.sleep(0.5)
         except Exception as e:
-            print(f"  [WARN] Google Trends取得失敗: {e}")
+            print(f"    [WARN] Google Trends取得失敗: {e}")
 
-    # Naverリアルタイム検索（シミュレーション用）
+    print(f"    → {len(trends)}件")
+    return trends
+
+
+def fetch_naver_trends():
+    """Naverからトレンドキーワードを取得"""
+    print("  [2/3] Naverからトレンドを取得中...")
+
+    trends = []
+
     try:
         naver_url = "https://www.naver.com"
         text = fetch_url(naver_url, timeout=15)
         if text:
-            # 검색어 랭킹 추출 시도
-            naver_trends = re.findall(r'data-clk="[^"]*">([가-힣a-zA-Z0-9\s]+)</a>', text)
-            for trend in naver_trends[:20]:
-                trend = trend.strip()
-                if trend and len(trend) > 1 and trend not in trends:
-                    trends.append(trend)
+            # 複数のパターンで抽出を試みる
+            patterns = [
+                r'data-clk="[^"]*">([가-힣a-zA-Z0-9\s]+)</a>',
+                r'"keyword":"([^"]+)"',
+                r'class="[^"]*keyword[^"]*"[^>]*>([^<]+)<'
+            ]
+            for pattern in patterns:
+                matches = re.findall(pattern, text)
+                for trend in matches[:20]:
+                    trend = trend.strip()
+                    if trend and len(trend) > 1 and trend not in trends:
+                        trends.append(trend)
     except Exception as e:
-        print(f"  [WARN] Naver取得失敗: {e}")
+        print(f"    [WARN] Naver取得失敗: {e}")
 
-    print(f"  → {len(trends)}件の急上昇ワードを検出")
-    return trends[:50]
+    print(f"    → {len(trends)}件")
+    return trends
+
+
+def fetch_daum_trends():
+    """Daumからトレンドキーワードを取得"""
+    print("  [3/3] Daumからトレンドを取得中...")
+
+    keywords = []
+
+    try:
+        daum_url = "https://www.daum.net"
+        text = fetch_url(daum_url, timeout=15)
+        if text:
+            # 検索ランキングを抽出
+            patterns = [
+                r'<a[^>]*class="[^"]*rank[^"]*"[^>]*>([^<]+)</a>',
+                r'"issueKeyword":"([^"]+)"'
+            ]
+            for pattern in patterns:
+                matches = re.findall(pattern, text)
+                for kw in matches[:15]:
+                    kw = kw.strip()
+                    if kw and len(kw) > 1 and kw not in keywords:
+                        keywords.append(kw)
+    except Exception as e:
+        print(f"    [WARN] Daum取得失敗: {e}")
+
+    print(f"    → {len(keywords)}件")
+    return keywords
+
+
+def fetch_all_trend_sources():
+    """全てのトレンドソースからキーワードを収集"""
+    all_trends = []
+    seen = set()
+
+    # 各ソースから取得
+    sources = [
+        fetch_google_trends_kr(),
+        fetch_naver_trends(),
+        fetch_daum_trends()
+    ]
+
+    for trends in sources:
+        for trend in trends:
+            trend_lower = trend.lower()
+            if trend_lower not in seen:
+                seen.add(trend_lower)
+                all_trends.append(trend)
+
+    print(f"\n  合計: {len(all_trends)}件の新規トレンド候補")
+    return all_trends
 
 
 def detect_generation(keyword):
@@ -309,6 +424,32 @@ def fetch_wikipedia(keyword, days=90):
         return 0
 
 
+def quick_score_check(keyword):
+    """キーワードの簡易スコアチェック（高速版）"""
+    # Google Newsの直近1週間のみチェック
+    now = datetime.now()
+    end_date = now
+    start_date = end_date - timedelta(days=7)
+    after_str = start_date.strftime('%Y-%m-%d')
+    before_str = end_date.strftime('%Y-%m-%d')
+
+    query = f"{keyword} after:{after_str} before:{before_str}"
+    encoded_query = urllib.parse.quote(query)
+    url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ko&gl=KR&ceid=KR:ko"
+
+    text = fetch_url(url, timeout=10)
+    news_count = len(re.findall(r'<item>', text)) if text else 0
+
+    # YouTubeの検索結果数のみチェック
+    yt_url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(keyword)}&gl=KR"
+    yt_text = fetch_url(yt_url, timeout=10)
+    yt_count = len(re.findall(r'"videoRenderer"', yt_text)) if yt_text else 0
+
+    # 簡易スコア計算
+    quick_score = (news_count * 3) + (yt_count * 2)
+    return quick_score
+
+
 def analyze_keyword(keyword):
     """キーワードの各種メトリクスを取得してスコア計算"""
     news = fetch_news(keyword)
@@ -428,16 +569,16 @@ def save_score_history(gen, history_data):
 
 def main():
     print("=" * 60)
-    print("韓国向け世代別トレンドデータ収集開始（自動トレンドモード）")
+    print("韓国向け世代別トレンドデータ収集開始（拡張トレンドモード）")
     print(f"実行時刻: {datetime.now().isoformat()}")
     print("=" * 60)
 
-    # Step 1: Google Trendsから新規トレンドを取得
+    # Step 1: 複数ソースから新規トレンドを取得
     print("\n" + "-" * 40)
-    print("Phase 1: 新規トレンド取得")
+    print("Phase 1: 新規トレンド取得（複数ソース）")
     print("-" * 40)
 
-    new_trends = fetch_google_trends_kr()
+    new_trends = fetch_all_trend_sources()
 
     # Step 2: 各世代のキーワードを処理
     print("\n" + "-" * 40)
@@ -470,18 +611,15 @@ def main():
         # 分析対象キーワードを構築
         keywords_to_analyze = []
 
-        # 前回のキーワードをスコア順にソートして上位のみ継承
+        # 1. 前回のキーワードをスコア順にソートして上位のみ継承
         inherited_count = 0
         dropped_count = 0
-
-        # スコア順にソート（高い順）
         sorted_prev_keywords = sorted(previous_keywords, key=lambda x: x.get('score', 0), reverse=True)
 
         for prev_kw in sorted_prev_keywords:
             kw_name = prev_kw.get('keyword', '')
             prev_score = prev_kw.get('score', 0)
 
-            # 空のキーワードはスキップ
             if not kw_name or not kw_name.strip():
                 continue
 
@@ -500,9 +638,15 @@ def main():
 
         print(f"  継承: {inherited_count}件 (上位{MAX_INHERITED_KEYWORDS}位まで), 脱落: {dropped_count}件")
 
-        # 新規トレンドを追加（最大数まで）
+        # 2. 新規トレンドを追加（枠が残っている場合）
         remaining_slots = MAX_KEYWORDS_PER_GEN - len(keywords_to_analyze)
-        new_trends_to_add = gen_new_trends[:remaining_slots]
+        existing_kws = set(k['keyword'].lower() for k in keywords_to_analyze)
+
+        new_trends_to_add = []
+        for trend in gen_new_trends:
+            if trend.lower() not in existing_kws and len(new_trends_to_add) < remaining_slots:
+                new_trends_to_add.append(trend)
+                existing_kws.add(trend.lower())
 
         for trend in new_trends_to_add:
             keywords_to_analyze.append({
@@ -510,12 +654,43 @@ def main():
                 'isNew': True
             })
 
-        print(f"  新規追加: {len(new_trends_to_add)}件")
+        print(f"  新規トレンド追加: {len(new_trends_to_add)}件")
 
-        # 初回実行時またはキーワードが少なすぎる場合、シードキーワードを追加
+        # 3. ランダム探索（埋もれたキーワードを発掘）
+        explore_count = 0
+        remaining_slots = MAX_KEYWORDS_PER_GEN - len(keywords_to_analyze)
+        if remaining_slots > 0 and gen in EXPLORE_POOL:
+            # 既存キーワードにないものからランダムに選択
+            available_explore = [kw for kw in EXPLORE_POOL[gen] if kw.lower() not in existing_kws]
+            if available_explore:
+                explore_candidates = random.sample(available_explore, min(RANDOM_EXPLORE_COUNT, len(available_explore)))
+
+                print(f"\n  ランダム探索: {len(explore_candidates)}件の候補を簡易チェック中...")
+                for kw in explore_candidates:
+                    try:
+                        quick = quick_score_check(kw)
+                        print(f"    {kw}: quick_score={quick}", end='')
+                        # 簡易スコアが一定以上なら追加
+                        if quick >= 20:
+                            keywords_to_analyze.append({
+                                'keyword': kw,
+                                'isNew': True,
+                                'isExplore': True
+                            })
+                            existing_kws.add(kw.lower())
+                            explore_count += 1
+                            print(" → 追加")
+                        else:
+                            print(" → スキップ")
+                        time.sleep(0.3)
+                    except Exception as e:
+                        print(f" → エラー: {e}")
+
+        print(f"  ランダム探索追加: {explore_count}件")
+
+        # 4. シードキーワード（初回または少なすぎる場合）
         seed_count = 0
         if len(keywords_to_analyze) < 10 and gen in SEED_KEYWORDS:
-            existing_kws = set(k['keyword'].lower() for k in keywords_to_analyze)
             for seed in SEED_KEYWORDS[gen]:
                 if seed.lower() not in existing_kws and len(keywords_to_analyze) < MAX_KEYWORDS_PER_GEN:
                     keywords_to_analyze.append({
@@ -523,8 +698,10 @@ def main():
                         'isNew': True,
                         'isSeed': True
                     })
+                    existing_kws.add(seed.lower())
                     seed_count += 1
-            print(f"  シード追加: {seed_count}件")
+            if seed_count > 0:
+                print(f"  シード追加: {seed_count}件")
 
         print(f"  合計分析対象: {len(keywords_to_analyze)}件")
 
@@ -535,13 +712,15 @@ def main():
         for i, kw_data in enumerate(keywords_to_analyze):
             kw = kw_data['keyword']
             is_new = kw_data.get('isNew', False)
-            prefix = "🆕" if is_new else "📌"
+            is_explore = kw_data.get('isExplore', False)
+            prefix = "🔍" if is_explore else ("🆕" if is_new else "📌")
             print(f"  [{i+1}/{len(keywords_to_analyze)}] {prefix} {kw}...", end=' ')
 
             try:
                 result = analyze_keyword(kw)
                 result['isNew'] = is_new
                 result['isTrending'] = is_new
+                result['isExplore'] = is_explore
 
                 # スコア変動を計算
                 if 'prevScore' in kw_data:
@@ -585,7 +764,8 @@ def main():
         print(f"\n  KVに保存中...", end=' ')
         if save_to_kv(gen, results):
             new_count = len([r for r in results if r.get('isNew')])
-            print(f"✓ {len(results)}件保存（うち新規{new_count}件）")
+            explore_count = len([r for r in results if r.get('isExplore')])
+            print(f"✓ {len(results)}件保存（新規{new_count}件, 探索{explore_count}件）")
         else:
             print("✗ 保存失敗")
 
@@ -597,7 +777,7 @@ def main():
             print("✗ 保存失敗")
 
     print("\n" + "=" * 60)
-    print("韓国データ収集完了（自動トレンドモード）")
+    print("韓国データ収集完了（拡張トレンドモード）")
     print("=" * 60)
 
 
