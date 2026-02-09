@@ -32,6 +32,9 @@ ssl_context.verify_mode = ssl.CERT_NONE
 AUTO_TREND_ENABLED = True
 MAX_AUTO_TRENDS_PER_GEN = 10  # 各世代に追加する自動トレンドの最大数
 
+# スコア履歴設定
+HISTORY_DAYS_TO_KEEP = 30  # 保持する履歴日数
+
 # 韓国向けキーワード定義（5世代、各世代25-40キーワード）
 KEYWORDS = {
     'genz': [
@@ -409,6 +412,94 @@ def save_to_kv(gen, keywords_data):
         return False
 
 
+def get_previous_scores(gen):
+    """前回のスコアデータを取得"""
+    key = f"gen7_data_kr_{gen}"
+    url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/storage/kv/namespaces/{CF_KV_NAMESPACE_ID}/values/{key}"
+    headers = {
+        'Authorization': f'Bearer {CF_API_TOKEN}'
+    }
+
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=30, context=ssl_context) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            score_map = {}
+            for kw in data.get('keywords', []):
+                score_map[kw['keyword']] = {
+                    'score': kw.get('score', 0),
+                    'date': data.get('analyzedAt', '')[:10]
+                }
+            return score_map, data.get('analyzedAt', '')
+    except Exception as e:
+        print(f"  [INFO] No previous data for {gen}: {e}")
+        return {}, None
+
+
+def get_score_history(gen):
+    """스코어 히스토리 가져오기"""
+    key = f"gen7_history_kr_{gen}"
+    url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/storage/kv/namespaces/{CF_KV_NAMESPACE_ID}/values/{key}"
+    headers = {
+        'Authorization': f'Bearer {CF_API_TOKEN}'
+    }
+
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=30, context=ssl_context) as response:
+            return json.loads(response.read().decode('utf-8'))
+    except Exception as e:
+        return {'history': {}}
+
+
+def save_score_history(gen, history_data):
+    """스코어 히스토리 저장"""
+    key = f"gen7_history_kr_{gen}"
+
+    # 오래된 히스토리 삭제 (30일 이상 경과)
+    cutoff_date = (datetime.now() - timedelta(days=HISTORY_DAYS_TO_KEEP)).strftime('%Y-%m-%d')
+    cleaned_history = {}
+    for kw, dates in history_data.get('history', {}).items():
+        cleaned_dates = {d: s for d, s in dates.items() if d >= cutoff_date}
+        if cleaned_dates:
+            cleaned_history[kw] = cleaned_dates
+
+    value = json.dumps({
+        'country': 'kr',
+        'gen': gen,
+        'history': cleaned_history,
+        'updatedAt': datetime.now().isoformat()
+    })
+
+    url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/storage/kv/namespaces/{CF_KV_NAMESPACE_ID}/values/{key}"
+    headers = {
+        'Authorization': f'Bearer {CF_API_TOKEN}',
+        'Content-Type': 'application/json'
+    }
+
+    req = urllib.request.Request(url, data=value.encode('utf-8'), headers=headers, method='PUT')
+    try:
+        with urllib.request.urlopen(req, timeout=30, context=ssl_context) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            return result.get('success', False)
+    except Exception as e:
+        print(f"  [ERROR] History save failed: {e}")
+        return False
+
+
+def calculate_score_change(current_score, prev_scores, keyword):
+    """스코어 변동 계산"""
+    if keyword not in prev_scores:
+        return None, None
+
+    prev = prev_scores[keyword]
+    prev_score = prev.get('score', 0)
+    change = round(current_score - prev_score, 1)
+    change_pct = round((change / prev_score * 100), 1) if prev_score > 0 else 0
+
+    return change, change_pct
+
+
 def save_auto_trends_to_kv(auto_trends_data):
     """자동 검출 트렌드를 KV에 저장"""
     key = "gen7_auto_trends_kr"
@@ -468,6 +559,15 @@ def main():
     all_auto_trends_analyzed = {}
 
     for gen, keywords in KEYWORDS.items():
+        # 前回のスコアを取得
+        prev_scores, prev_date = get_previous_scores(gen)
+        if prev_date:
+            print(f"\n  이전 데이터: {prev_date[:10]} ({len(prev_scores)}키워드)")
+
+        # スコア履歴を取得
+        history_data = get_score_history(gen)
+        today = datetime.now().strftime('%Y-%m-%d')
+
         # 自動トレンドを追加
         auto_trends = auto_trends_by_gen.get(gen, [])
         combined_keywords = list(keywords) + auto_trends
@@ -486,12 +586,34 @@ def main():
                 result = analyze_keyword(kw)
                 result['isAutoDetected'] = is_auto  # 自動検出フラグを追加
 
+                # スコア変動を計算
+                change, change_pct = calculate_score_change(result['score'], prev_scores, kw)
+                if change is not None:
+                    result['scoreChange'] = change
+                    result['scoreChangePct'] = change_pct
+                    if prev_scores.get(kw):
+                        result['prevScore'] = prev_scores[kw]['score']
+                        result['prevDate'] = prev_scores[kw]['date']
+
+                # 履歴に追加
+                if kw not in history_data.get('history', {}):
+                    if 'history' not in history_data:
+                        history_data['history'] = {}
+                    history_data['history'][kw] = {}
+                history_data['history'][kw][today] = result['score']
+
                 if is_auto:
                     auto_results.append(result)
                 else:
                     results.append(result)
 
-                print(f"✓ score={result['score']}, refs={result['totalRefs']}")
+                # 変動表示
+                change_str = ""
+                if change is not None and change != 0:
+                    arrow = "↑" if change > 0 else "↓"
+                    change_str = f" ({arrow}{abs(change)})"
+
+                print(f"✓ score={result['score']}{change_str}, refs={result['totalRefs']}")
             except Exception as e:
                 print(f"✗ {e}")
 
@@ -511,6 +633,13 @@ def main():
             print(f"✓ {len(results)}件保存完了")
         else:
             print("✗ 保存失敗")
+
+        # スコア履歴を保存
+        print(f"  히스토리 저장 중...", end=' ')
+        if save_score_history(gen, history_data):
+            print(f"✓")
+        else:
+            print("✗ 저장 실패")
 
     # Step 3: 自動トレンド結果を別途保存
     if all_auto_trends_analyzed:
