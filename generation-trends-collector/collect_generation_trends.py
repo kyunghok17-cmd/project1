@@ -260,15 +260,15 @@ def fetch_url(url, headers=None, timeout=30):
 
 
 def fetch_news(keyword, hl, gl):
-    """Google Newsから記事数を取得（月別分割で3か月分、高速版）"""
+    """Google Newsから記事数を取得（週別分割で4週間分、各週最大100件）"""
     total = 0
     recent = 0
     now = datetime.now()
 
-    # 3か月分を月別に取得（各月最大100件 = 合計最大300件）
-    for month in range(3):
-        end_date = now - timedelta(days=month * 30)
-        start_date = end_date - timedelta(days=30)
+    # 4週間分を週別に取得（各週最大100件 = 合計最大400件）
+    for week in range(4):
+        end_date = now - timedelta(days=week * 7)
+        start_date = end_date - timedelta(days=7)
 
         after_str = start_date.strftime('%Y-%m-%d')
         before_str = end_date.strftime('%Y-%m-%d')
@@ -281,15 +281,15 @@ def fetch_news(keyword, hl, gl):
         if not text:
             continue
 
-        month_count = len(re.findall(r'<item>', text))
-        total += month_count
+        week_count = len(re.findall(r'<item>', text))
+        total += week_count
 
-        # 直近30日（month=0）の記事数をカウント
-        if month == 0:
-            recent = month_count
+        # 直近7日（week=0）の記事数をカウント
+        if week == 0:
+            recent = week_count
 
-        # レート制限対策（短縮）
-        time.sleep(0.15)
+        # レート制限対策
+        time.sleep(0.2)
 
     return {'count': total, 'recent': recent}
 
