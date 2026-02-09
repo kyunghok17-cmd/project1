@@ -332,7 +332,7 @@ def analyze_keyword(keyword):
 
 def save_to_kv(gen, results):
     """結果をCloudflare KVに保存"""
-    key = f"gen7_kr_{gen}"
+    key = f"gen7_data_kr_{gen}"
 
     # カテゴリでグループ化
     categories = {}
