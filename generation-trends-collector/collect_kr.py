@@ -574,6 +574,10 @@ def main():
             results = results[:MAX_KEYWORDS_PER_GEN]
 
         # KVに保存
+        if not results:
+            print(f"\n  [WARN] 分析結果が0件のためスキップ")
+            continue
+
         print(f"\n  KVに保存中...", end=' ')
         if save_to_kv(gen, results):
             new_count = len([r for r in results if r.get('isNew')])
