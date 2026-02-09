@@ -31,8 +31,8 @@ ssl_context.verify_mode = ssl.CERT_NONE
 
 # 設定
 MAX_KEYWORDS_PER_GEN = 50  # 各世代の最大キーワード数
+MAX_INHERITED_KEYWORDS = 40  # 継承キーワードの最大数（上位40件のみ継承、下位は脱落）
 MAX_NEW_TRENDS_PER_GEN = 20  # 各世代に追加する新規トレンドの最大数
-MIN_SCORE_THRESHOLD = 5.0  # この点数以下のキーワードは脱落候補
 HISTORY_DAYS_TO_KEEP = 30  # 保持する履歴日数
 
 # シードキーワード（初回実行時または前回データが少ない場合に使用）
@@ -470,10 +470,14 @@ def main():
         # 分析対象キーワードを構築
         keywords_to_analyze = []
 
-        # 前回のキーワードを追加（スコアが低すぎないもの）
+        # 前回のキーワードをスコア順にソートして上位のみ継承
         inherited_count = 0
         dropped_count = 0
-        for prev_kw in previous_keywords:
+
+        # スコア順にソート（高い順）
+        sorted_prev_keywords = sorted(previous_keywords, key=lambda x: x.get('score', 0), reverse=True)
+
+        for prev_kw in sorted_prev_keywords:
             kw_name = prev_kw.get('keyword', '')
             prev_score = prev_kw.get('score', 0)
 
@@ -481,10 +485,10 @@ def main():
             if not kw_name or not kw_name.strip():
                 continue
 
-            # スコアが低すぎるものは脱落（ただし、少なくとも10件は維持）
-            if prev_score < MIN_SCORE_THRESHOLD and inherited_count >= 10:
+            # 上位MAX_INHERITED_KEYWORDS件のみ継承（下位は自動脱落）
+            if inherited_count >= MAX_INHERITED_KEYWORDS:
                 dropped_count += 1
-                print(f"  [DROP] {kw_name} (score={prev_score})")
+                print(f"  [DROP] {kw_name} (ランキング{inherited_count + dropped_count}位, score={prev_score})")
                 continue
 
             keywords_to_analyze.append({
@@ -494,7 +498,7 @@ def main():
             })
             inherited_count += 1
 
-        print(f"  継承: {inherited_count}件, 脱落: {dropped_count}件")
+        print(f"  継承: {inherited_count}件 (上位{MAX_INHERITED_KEYWORDS}位まで), 脱落: {dropped_count}件")
 
         # 新規トレンドを追加（最大数まで）
         remaining_slots = MAX_KEYWORDS_PER_GEN - len(keywords_to_analyze)
