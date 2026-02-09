@@ -116,7 +116,7 @@ def fetch_url(url, headers=None, timeout=30):
 
 def get_previous_keywords_from_kv(gen):
     """前回保存されたキーワードをKVから取得"""
-    key = f"gen7_jp_{gen}"
+    key = f"gen7_data_jp_{gen}"
     url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/storage/kv/namespaces/{CF_KV_NAMESPACE_ID}/values/{key}"
     headers = {
         'Authorization': f'Bearer {CF_API_TOKEN}'
