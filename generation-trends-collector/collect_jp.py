@@ -5,8 +5,9 @@ GitHub Actionsで毎日実行し、Cloudflare KVに保存
 
 機能:
 1. 事前定義キーワードの分析
-2. Google Trends急上昇ワードの自動検出
+2. Google Trends急上昇ワードの自動検出・メイン統合
 3. 世代判定によるキーワード分類
+4. 流行キーワードの自動更新
 """
 
 import os
@@ -30,10 +31,14 @@ ssl_context.verify_mode = ssl.CERT_NONE
 
 # 自動トレンド検出の設定
 AUTO_TREND_ENABLED = True
-MAX_AUTO_TRENDS_PER_GEN = 10  # 各世代に追加する自動トレンドの最大数
+MAX_AUTO_TRENDS_PER_GEN = 15  # 各世代に追加する自動トレンドの最大数（メイン統合用に増加）
+INTEGRATE_TRENDS_TO_MAIN = True  # 自動トレンドをメインキーワードに統合
 
 # スコア履歴設定
 HISTORY_DAYS_TO_KEEP = 30  # 保持する履歴日数
+
+# 最大キーワード数（事前定義 + 自動トレンド）
+MAX_KEYWORDS_PER_GEN = 60
 
 # 日本向けキーワード定義（5世代、各世代30-50キーワード）
 KEYWORDS = {
@@ -553,9 +558,9 @@ def main():
                 if gen_trends:
                     print(f"  {gen}: {len(gen_trends)}件 - {', '.join(gen_trends[:5])}...")
 
-    # Step 2: 事前定義キーワード + 自動トレンドの分析
+    # Step 2: 事前定義キーワード + 自動トレンドの分析（統合モード）
     print("\n" + "-" * 40)
-    print("Phase 2: キーワード分析")
+    print("Phase 2: キーワード分析（自動トレンド統合）")
     print("-" * 40)
 
     all_auto_trends_analyzed = {}
@@ -576,17 +581,17 @@ def main():
 
         print(f"\n[{gen}] {len(keywords)}定義 + {len(auto_trends)}自動 = {len(combined_keywords)}キーワード分析中...")
 
-        results = []
-        auto_results = []
+        all_results = []  # 統合用リスト
 
         for i, kw in enumerate(combined_keywords):
             is_auto = i >= len(keywords)
-            prefix = "[AUTO]" if is_auto else ""
+            prefix = "🔥" if is_auto else ""
             print(f"  [{i+1}/{len(combined_keywords)}] {prefix}{kw}...", end=' ')
 
             try:
                 result = analyze_keyword(kw)
                 result['isAutoDetected'] = is_auto  # 自動検出フラグを追加
+                result['isTrending'] = is_auto  # トレンドキーワードフラグ
 
                 # スコア変動を計算
                 change, change_pct = calculate_score_change(result['score'], prev_scores, kw)
@@ -604,10 +609,7 @@ def main():
                     history_data['history'][kw] = {}
                 history_data['history'][kw][today] = result['score']
 
-                if is_auto:
-                    auto_results.append(result)
-                else:
-                    results.append(result)
+                all_results.append(result)
 
                 # 変動表示
                 change_str = ""
@@ -615,24 +617,31 @@ def main():
                     arrow = "↑" if change > 0 else "↓"
                     change_str = f" ({arrow}{abs(change)})"
 
-                print(f"✓ score={result['score']}{change_str}, refs={result['totalRefs']}")
+                trend_mark = "🔥" if is_auto else ""
+                print(f"✓ score={result['score']}{change_str}, refs={result['totalRefs']} {trend_mark}")
             except Exception as e:
                 print(f"✗ {e}")
 
             time.sleep(0.3)
 
-        # 事前定義キーワードをスコア順にソート
-        results.sort(key=lambda x: x['score'], reverse=True)
+        # スコア順にソート（事前定義と自動トレンドを統合）
+        all_results.sort(key=lambda x: x['score'], reverse=True)
 
-        # 自動トレンドも保存用に記録
+        # 自動トレンドを別途記録（参照用）
+        auto_results = [r for r in all_results if r.get('isAutoDetected')]
         if auto_results:
-            auto_results.sort(key=lambda x: x['score'], reverse=True)
             all_auto_trends_analyzed[gen] = auto_results
 
-        # KVに保存（事前定義キーワードのみ - 既存の動作を維持）
-        print(f"\n  KVに保存中...", end=' ')
-        if save_to_kv(gen, results):
-            print(f"✓ {len(results)}件保存完了")
+        # 最大キーワード数を制限（スコア上位を保持）
+        if len(all_results) > MAX_KEYWORDS_PER_GEN:
+            all_results = all_results[:MAX_KEYWORDS_PER_GEN]
+            print(f"  [INFO] 上位{MAX_KEYWORDS_PER_GEN}件に制限")
+
+        # KVに保存（事前定義 + 自動トレンドを統合）
+        print(f"\n  KVに保存中（統合）...", end=' ')
+        if save_to_kv(gen, all_results):
+            auto_count = len([r for r in all_results if r.get('isAutoDetected')])
+            print(f"✓ {len(all_results)}件保存完了（うちトレンド{auto_count}件）")
         else:
             print("✗ 保存失敗")
 
