@@ -1,9 +1,9 @@
-name: Collect Generation Trends Data
+name: Collect Trends Data (Korea)
 
 on:
   schedule:
-    # 毎日 UTC 0:00 (JST 9:00) に実行
-    - cron: '0 0 * * *'
+    # 毎日 UTC 1:00 (KST 10:00) に実行（日本と1時間ずらす）
+    - cron: '0 1 * * *'
   workflow_dispatch:  # 手動実行可能
 
 jobs:
@@ -20,16 +20,15 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Run collection script
+      - name: Run Korea collection script
         env:
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           CF_KV_NAMESPACE_ID: ${{ secrets.CF_KV_NAMESPACE_ID }}
-          WORKER_URL: https://generation-trends.kyunghok17.workers.dev
         run: |
-          python generation-trends-collector/collect_generation_trends.py
+          python generation-trends-collector/collect_kr.py
 
       - name: Report status
         if: always()
         run: |
-          echo "Collection completed at $(date)"
+          echo "Korea collection completed at $(date)"
