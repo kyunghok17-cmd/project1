@@ -2,6 +2,11 @@
 """
 韓国向け世代別トレンドデータ収集スクリプト
 GitHub Actionsで毎日実行し、Cloudflare KVに保存
+
+機能:
+1. 事前定義キーワードの分析
+2. Google Trends/Naver急上昇ワードの自動検出
+3. 世代判定によるキーワード分類
 """
 
 import os
@@ -22,6 +27,10 @@ CF_KV_NAMESPACE_ID = os.environ.get('CF_KV_NAMESPACE_ID') or "f5c396bf00af493aba
 ssl_context = ssl.create_default_context()
 ssl_context.check_hostname = False
 ssl_context.verify_mode = ssl.CERT_NONE
+
+# 自動トレンド検出の設定
+AUTO_TREND_ENABLED = True
+MAX_AUTO_TRENDS_PER_GEN = 10  # 各世代に追加する自動トレンドの最大数
 
 # 韓国向けキーワード定義（5世代、各世代25-40キーワード）
 KEYWORDS = {
@@ -85,6 +94,147 @@ KEYWORDS = {
         '보청기', '휠체어', '안부확인', '호스피스', '완화의료', '연명치료'
     ]
 }
+
+# 世代判定用キーワードパターン（韓国）
+GENERATION_PATTERNS = {
+    'genz': {
+        'keywords': ['틱톡', '디스코드', '버튜버', '유튜브', '쇼츠', '인스타', '스레드', '트위치', '치지직',
+                     '원신', '블루아카이브', '발로란트', '리그오브레전드', 'e스포츠', '스타레일', '메이플',
+                     'K-POP', '아이돌', 'BTS', 'BLACKPINK', '뉴진스', '에스파', 'IVE', '르세라핌',
+                     '무신사', '올리브영', '당근마켓', 'MZ세대', 'MBTI', '갓생', '취준', '코딩', 'ChatGPT', 'AI'],
+        'age_range': (10, 27),
+        'description': '1997년 이후 출생'
+    },
+    'millennial': {
+        'keywords': ['주식투자', '부동산', '코인', '재테크', 'ETF', 'ISA', 'S&P500', '배당주', '미국주식',
+                     '이직', 'N잡러', '재택근무', '프리랜서', '창업', '리스킬링', '워라밸',
+                     '아파트', '전세', '청약', '대출', '내집마련', '주택담보', '월세',
+                     '어린이집', '육아휴직', '육아', '맞벌이', '출산휴가', '양육비',
+                     '헬스', '다이어트', '멘탈케어', '웹툰', '넷플릭스'],
+        'age_range': (28, 43),
+        'description': '1981-1996년 출생'
+    },
+    'genx': {
+        'keywords': ['입시', '수능', '학원', '교육비', '대학등록금', '과외', '학자금', '특목고',
+                     '건강검진', '암검진', '갱년기', '성인병', '고혈압', '당뇨',
+                     '부모님돌봄', '요양보험', '간병', '요양원', '요양병원', '치매',
+                     '명퇴', '조기퇴직', '퇴직금운용', '노후준비', '연금', '상속'],
+        'age_range': (44, 59),
+        'description': '1965-1980년 출생'
+    },
+    'boomer': {
+        'keywords': ['국민연금', '퇴직연금', '정년퇴직', '재취업', '시니어일자리', '노령연금',
+                     '고혈압', '당뇨', '운동', '걷기', '골다공증',
+                     '웰다잉', '유언장', '상속', '장례', '여행', '취미', '스마트폰교육', '온라인쇼핑'],
+        'age_range': (60, 74),
+        'description': '1950-1964년 출생'
+    },
+    'senior': {
+        'keywords': ['장기요양등급', '주간보호', '방문요양', '요양보험', '요양원', '실버타운',
+                     '요양보호사', '재가요양', '치매', '재활', '백내장', '노인의료', '방문간호', '골다공증',
+                     '보청기', '휠체어', '안부확인', '호스피스', '완화의료', '연명치료'],
+        'age_range': (75, 100),
+        'description': '1949년 이전 출생'
+    }
+}
+
+
+def detect_generation(keyword):
+    """키워드에서 가장 관련된 세대를 판정"""
+    scores = {gen: 0 for gen in GENERATION_PATTERNS.keys()}
+    keyword_lower = keyword.lower()
+
+    for gen, pattern in GENERATION_PATTERNS.items():
+        for kw in pattern['keywords']:
+            if kw.lower() in keyword_lower or keyword_lower in kw.lower():
+                scores[gen] += 2
+            # 부분 일치도 고려
+            elif any(part in keyword_lower for part in kw.lower().split()):
+                scores[gen] += 1
+
+    # 최고 점수의 세대를 반환 (동점일 경우 젊은 세대 우선)
+    max_score = max(scores.values())
+    if max_score == 0:
+        return None  # 어느 세대에도 해당하지 않음
+
+    gen_order = ['genz', 'millennial', 'genx', 'boomer', 'senior']
+    for gen in gen_order:
+        if scores[gen] == max_score:
+            return gen
+    return None
+
+
+def fetch_google_trends_kr():
+    """Google Trends 급상승 검색어 가져오기 (한국)"""
+    print("\n[AUTO] Google Trends/Naver 급상승 검색어 가져오는 중...")
+
+    trends = []
+
+    # Google Trends RSS (한국 급상승)
+    urls = [
+        "https://trends.google.co.kr/trending/rss?geo=KR",
+        "https://trends.google.com/trends/trendingsearches/daily/rss?geo=KR"
+    ]
+
+    for url in urls:
+        try:
+            text = fetch_url(url, timeout=15)
+            if not text:
+                continue
+
+            # RSS에서 트렌드 워드 추출
+            titles = re.findall(r'<title>(?:<!\[CDATA\[)?([^<\]]+)(?:\]\]>)?</title>', text)
+            for title in titles:
+                title = title.strip()
+                # 필터링
+                if title and len(title) > 1 and title not in ['Daily Search Trends', 'Google 트렌드', '급상승 검색어']:
+                    if title not in trends:
+                        trends.append(title)
+
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"  [WARN] Google Trends 가져오기 실패: {e}")
+
+    # Naver 실시간 검색어에서도 가져오기 시도
+    try:
+        naver_url = "https://datalab.naver.com/keyword/realtimeList.naver"
+        text = fetch_url(naver_url, timeout=15)
+        if text:
+            # 트렌드 워드 추출 (패턴 매칭)
+            naver_trends = re.findall(r'"keyword"\s*:\s*"([^"]+)"', text)
+            for trend in naver_trends[:20]:
+                trend = trend.strip()
+                if trend and len(trend) > 1 and trend not in trends:
+                    trends.append(trend)
+    except Exception as e:
+        print(f"  [WARN] Naver 실시간 검색어 가져오기 실패: {e}")
+
+    print(f"  → {len(trends)}건의 급상승 검색어 검출")
+    return trends[:50]  # 최대 50건
+
+
+def classify_trends_by_generation(trends, existing_keywords):
+    """트렌드 워드를 세대별로 분류"""
+    classified = {gen: [] for gen in GENERATION_PATTERNS.keys()}
+
+    # 기존 키워드 세트 생성 (중복 체크용)
+    all_existing = set()
+    for gen_keywords in existing_keywords.values():
+        all_existing.update(kw.lower() for kw in gen_keywords)
+
+    for trend in trends:
+        # 기존 키워드와 중복이면 스킵
+        if trend.lower() in all_existing:
+            continue
+
+        # 세대 판정
+        gen = detect_generation(trend)
+        if gen and len(classified[gen]) < MAX_AUTO_TRENDS_PER_GEN:
+            classified[gen].append(trend)
+            print(f"  → [{gen}] {trend}")
+
+    return classified
+
 
 # カテゴリ分類
 def categorize_keyword(keyword):
@@ -259,34 +409,121 @@ def save_to_kv(gen, keywords_data):
         return False
 
 
+def save_auto_trends_to_kv(auto_trends_data):
+    """자동 검출 트렌드를 KV에 저장"""
+    key = "gen7_auto_trends_kr"
+    value = json.dumps({
+        'country': 'kr',
+        'trends': auto_trends_data,
+        'detectedAt': datetime.now().isoformat()
+    })
+
+    url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/storage/kv/namespaces/{CF_KV_NAMESPACE_ID}/values/{key}"
+    headers = {
+        'Authorization': f'Bearer {CF_API_TOKEN}',
+        'Content-Type': 'application/json'
+    }
+
+    req = urllib.request.Request(url, data=value.encode('utf-8'), headers=headers, method='PUT')
+    try:
+        with urllib.request.urlopen(req, timeout=30, context=ssl_context) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            return result.get('success', False)
+    except Exception as e:
+        print(f"  [ERROR] Auto trends KV save failed: {e}")
+        return False
+
+
 def main():
     print("=" * 60)
     print("韓国向け世代別トレンドデータ収集開始")
     print(f"実行時刻: {datetime.now().isoformat()}")
     print("=" * 60)
 
+    # Step 1: 自動トレンド検出
+    auto_trends_by_gen = {}
+    if AUTO_TREND_ENABLED:
+        print("\n" + "-" * 40)
+        print("Phase 1: 자동 트렌드 검출")
+        print("-" * 40)
+
+        # Google Trendsから急上昇ワードを取得
+        trends = fetch_google_trends_kr()
+
+        if trends:
+            # 世代別に分類
+            auto_trends_by_gen = classify_trends_by_generation(trends, KEYWORDS)
+
+            # 分類結果を表示
+            print("\n[AUTO] 세대별 분류 결과:")
+            for gen, gen_trends in auto_trends_by_gen.items():
+                if gen_trends:
+                    print(f"  {gen}: {len(gen_trends)}건 - {', '.join(gen_trends[:5])}...")
+
+    # Step 2: 事前定義キーワード + 自動トレンドの分析
+    print("\n" + "-" * 40)
+    print("Phase 2: 키워드 분석")
+    print("-" * 40)
+
+    all_auto_trends_analyzed = {}
+
     for gen, keywords in KEYWORDS.items():
-        print(f"\n[{gen}] {len(keywords)}キーワード分析中...")
+        # 自動トレンドを追加
+        auto_trends = auto_trends_by_gen.get(gen, [])
+        combined_keywords = list(keywords) + auto_trends
+
+        print(f"\n[{gen}] {len(keywords)}정의 + {len(auto_trends)}자동 = {len(combined_keywords)}키워드 분석 중...")
 
         results = []
-        for i, kw in enumerate(keywords):
-            print(f"  [{i+1}/{len(keywords)}] {kw}...", end=' ')
+        auto_results = []
+
+        for i, kw in enumerate(combined_keywords):
+            is_auto = i >= len(keywords)
+            prefix = "[AUTO]" if is_auto else ""
+            print(f"  [{i+1}/{len(combined_keywords)}] {prefix}{kw}...", end=' ')
+
             try:
                 result = analyze_keyword(kw)
-                results.append(result)
+                result['isAutoDetected'] = is_auto  # 自動検出フラグを追加
+
+                if is_auto:
+                    auto_results.append(result)
+                else:
+                    results.append(result)
+
                 print(f"✓ score={result['score']}, refs={result['totalRefs']}")
             except Exception as e:
                 print(f"✗ {e}")
 
             time.sleep(0.3)
 
+        # 事前定義キーワードをスコア順にソート
         results.sort(key=lambda x: x['score'], reverse=True)
 
+        # 自動トレンドも保存用に記録
+        if auto_results:
+            auto_results.sort(key=lambda x: x['score'], reverse=True)
+            all_auto_trends_analyzed[gen] = auto_results
+
+        # KVに保存（事前定義キーワードのみ - 既存の動作を維持）
         print(f"\n  KVに保存中...", end=' ')
         if save_to_kv(gen, results):
             print(f"✓ {len(results)}件保存完了")
         else:
             print("✗ 保存失敗")
+
+    # Step 3: 自動トレンド結果を別途保存
+    if all_auto_trends_analyzed:
+        print("\n" + "-" * 40)
+        print("Phase 3: 자동 트렌드 결과 저장")
+        print("-" * 40)
+
+        print("  자동 검출 트렌드를 KV에 저장 중...", end=' ')
+        if save_auto_trends_to_kv(all_auto_trends_analyzed):
+            total_auto = sum(len(v) for v in all_auto_trends_analyzed.values())
+            print(f"✓ {total_auto}건 저장 완료")
+        else:
+            print("✗ 저장 실패")
 
     print("\n" + "=" * 60)
     print("韓国データ収集完了")
