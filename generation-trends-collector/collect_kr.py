@@ -353,8 +353,6 @@ def save_to_kv(gen, results):
     for cat in categories:
         categories[cat].sort(key=lambda x: x['score'], reverse=True)
 
-    gen_meta = GENERATION_PATTERNS[gen]
-
     value = json.dumps({
         'generation': gen,
         'country': 'kr',
@@ -479,6 +477,10 @@ def main():
             kw_name = prev_kw.get('keyword', '')
             prev_score = prev_kw.get('score', 0)
 
+            # 空のキーワードはスキップ
+            if not kw_name or not kw_name.strip():
+                continue
+
             # スコアが低すぎるものは脱落（ただし、少なくとも10件は維持）
             if prev_score < MIN_SCORE_THRESHOLD and inherited_count >= 10:
                 dropped_count += 1
@@ -507,6 +509,7 @@ def main():
         print(f"  新規追加: {len(new_trends_to_add)}件")
 
         # 初回実行時またはキーワードが少なすぎる場合、シードキーワードを追加
+        seed_count = 0
         if len(keywords_to_analyze) < 10 and gen in SEED_KEYWORDS:
             existing_kws = set(k['keyword'].lower() for k in keywords_to_analyze)
             for seed in SEED_KEYWORDS[gen]:
@@ -516,7 +519,8 @@ def main():
                         'isNew': True,
                         'isSeed': True
                     })
-            print(f"  シード追加: {len(keywords_to_analyze) - len(new_trends_to_add) - inherited_count}件")
+                    seed_count += 1
+            print(f"  シード追加: {seed_count}件")
 
         print(f"  合計分析対象: {len(keywords_to_analyze)}件")
 
