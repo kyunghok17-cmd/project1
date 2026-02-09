@@ -35,6 +35,13 @@ MAX_NEW_TRENDS_PER_GEN = 20  # 各世代に追加する新規トレンドの最�
 MIN_SCORE_THRESHOLD = 5.0  # この点数以下のキーワードは脱落候補
 HISTORY_DAYS_TO_KEEP = 30  # 保持する履歴日数
 
+# シードキーワード（初回実行時または前回データが少ない場合に使用）
+SEED_KEYWORDS = {
+    'genz': ['TikTok', 'VTuber', '原神', 'Apex Legends', 'YOASOBI', 'Ado', 'ChatGPT', 'MBTI', 'メルカリ', '推し活'],
+    'millennial': ['NISA', '転職', 'ふるさと納税', '住宅ローン', '育児', 'Netflix', '副業', 'iDeCo', 'コストコ', 'ピラティス'],
+    'genx': ['中学受験', '介護保険', '更年期', '年金', '相続', '大学受験', '人間ドック', '教育費', '住宅ローン', '健康診断']
+}
+
 # 世代判定パターン（キーワードがどの世代に関連するかを判定）
 GENERATION_PATTERNS = {
     'genz': {
@@ -502,6 +509,19 @@ def main():
             })
 
         print(f"  新規追加: {len(new_trends_to_add)}件")
+
+        # 初回実行時またはキーワードが少なすぎる場合、シードキーワードを追加
+        if len(keywords_to_analyze) < 10 and gen in SEED_KEYWORDS:
+            existing_kws = set(k['keyword'].lower() for k in keywords_to_analyze)
+            for seed in SEED_KEYWORDS[gen]:
+                if seed.lower() not in existing_kws and len(keywords_to_analyze) < MAX_KEYWORDS_PER_GEN:
+                    keywords_to_analyze.append({
+                        'keyword': seed,
+                        'isNew': True,
+                        'isSeed': True
+                    })
+            print(f"  シード追加: {len(keywords_to_analyze) - len(new_trends_to_add) - inherited_count}件")
+
         print(f"  合計分析対象: {len(keywords_to_analyze)}件")
 
         # キーワード分析
