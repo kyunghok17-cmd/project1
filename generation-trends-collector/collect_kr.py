@@ -490,6 +490,37 @@ def suggest_category_name(keywords):
     return None
 
 
+def guess_category_by_pattern(keyword):
+    """キーワードのパターンからカテゴリを推測"""
+    # 人名・タレント関連のパターン
+    celebrity_patterns = ['배우', '가수', '아이돌', '코미디언', '개그맨', 'MC', '아나운서', '모델', '감독', '작가', '연예인']
+    # 地域・場所関連
+    location_patterns = ['지역', '도', '시', '구', '군', '읍', '역', '공항', '국', '반도']
+    # テクノロジー・企業関連
+    tech_patterns = ['Google', 'Apple', 'Microsoft', 'Amazon', 'Meta', 'Facebook', 'OpenAI', 'Anthropic',
+                     'React', 'Python', 'Java', 'API', 'SDK', '삼성', 'LG', '카카오', '네이버', 'AI']
+
+    keyword_lower = keyword.lower()
+
+    for pattern in celebrity_patterns:
+        if pattern.lower() in keyword_lower or keyword_lower in pattern.lower():
+            return '연예・유명인'
+
+    for pattern in location_patterns:
+        if pattern in keyword:
+            return '지역・장소'
+
+    for pattern in tech_patterns:
+        if pattern.lower() in keyword_lower or keyword_lower == pattern.lower():
+            return '테크놀로지'
+
+    # 韓国人名っぽいパターン（ハングル2-4文字）
+    if re.match(r'^[가-힣]+$', keyword) and 2 <= len(keyword) <= 4:
+        return '연예・유명인'
+
+    return None
+
+
 def analyze_category_health(results):
     """カテゴリの健全性を分析し、動的に調整"""
     global CATEGORY_PATTERNS
@@ -510,37 +541,67 @@ def analyze_category_health(results):
 
     changes_made = []
 
-    # 1. 「기타」が多すぎる場合 → 新カテゴリを自動生成
+    # 1. 「기타」が多すぎる場合 → カテゴリを推測して再分類
     if len(other_keywords) >= OTHER_CATEGORY_THRESHOLD:
-        print(f"\n  [카테고리 분석] 「기타」가 {len(other_keywords)}건 - 새 카테고리 검토 중...")
+        print(f"\n  [카테고리 분석] 「기타」가 {len(other_keywords)}건 - 재분류 시도 중...")
 
-        # 共通パターンを探す
-        common_words = extract_common_words(other_keywords)
+        # まず、パターンベースで再分類を試みる
+        reclassified = {}
+        remaining_others = []
 
-        for word, count in common_words[:3]:  # 上位3つまで検討
-            if count >= AUTO_CATEGORY_MIN_KEYWORDS:
-                # この単語を含むキーワードを抽出
-                matching_keywords = [kw for kw in other_keywords if word.lower() in kw.lower()]
+        for kw in other_keywords:
+            guessed_cat = guess_category_by_pattern(kw)
+            if guessed_cat:
+                if guessed_cat not in reclassified:
+                    reclassified[guessed_cat] = []
+                reclassified[guessed_cat].append(kw)
+            else:
+                remaining_others.append(kw)
 
-                if len(matching_keywords) >= AUTO_CATEGORY_MIN_KEYWORDS:
-                    # 新カテゴリを生成
-                    new_cat_name = word.capitalize()
+        # 推測されたカテゴリを適用
+        for cat_name, keywords in reclassified.items():
+            if len(keywords) >= 2:  # 2件以上あれば新カテゴリとして採用
+                if cat_name not in CATEGORY_PATTERNS:
+                    CATEGORY_PATTERNS[cat_name] = []
+                CATEGORY_PATTERNS[cat_name].extend(keywords)
+                changes_made.append(f"「{cat_name}」에 {len(keywords)}건 분류")
+                print(f"    → 「{cat_name}」에 분류: {keywords[:5]}...")
 
-                    # 既存カテゴリと重複しないか確認
-                    if new_cat_name not in CATEGORY_PATTERNS:
-                        CATEGORY_PATTERNS[new_cat_name] = matching_keywords.copy()
-                        changes_made.append(f"새 카테고리 「{new_cat_name}」 생성 ({len(matching_keywords)}건)")
-                        print(f"    → 새 카테고리 「{new_cat_name}」 생성: {matching_keywords[:5]}...")
+                # 対象キーワードのカテゴリを更新
+                for r in results:
+                    if r.get('keyword', '') in keywords:
+                        r['category'] = cat_name
 
-                        # 対象キーワードのカテゴリを更新
-                        for r in results:
-                            if r.get('keyword', '') in matching_keywords:
-                                r['category'] = new_cat_name
+        other_keywords = remaining_others
 
-                        # other_keywordsから削除
-                        for kw in matching_keywords:
-                            if kw in other_keywords:
-                                other_keywords.remove(kw)
+        # 共通パターンを探す（残りのキーワード）
+        if len(other_keywords) >= AUTO_CATEGORY_MIN_KEYWORDS:
+            common_words = extract_common_words(other_keywords)
+
+            for word, count in common_words[:3]:  # 上位3つまで検討
+                if count >= AUTO_CATEGORY_MIN_KEYWORDS:
+                    # この単語を含むキーワードを抽出
+                    matching_keywords = [kw for kw in other_keywords if word.lower() in kw.lower()]
+
+                    if len(matching_keywords) >= AUTO_CATEGORY_MIN_KEYWORDS:
+                        # 新カテゴリを生成
+                        new_cat_name = word.capitalize()
+
+                        # 既存カテゴリと重複しないか確認
+                        if new_cat_name not in CATEGORY_PATTERNS:
+                            CATEGORY_PATTERNS[new_cat_name] = matching_keywords.copy()
+                            changes_made.append(f"새 카테고리 「{new_cat_name}」 생성 ({len(matching_keywords)}건)")
+                            print(f"    → 새 카테고리 「{new_cat_name}」 생성: {matching_keywords[:5]}...")
+
+                            # 対象キーワードのカテゴリを更新
+                            for r in results:
+                                if r.get('keyword', '') in matching_keywords:
+                                    r['category'] = new_cat_name
+
+                            # other_keywordsから削除
+                            for kw in matching_keywords:
+                                if kw in other_keywords:
+                                    other_keywords.remove(kw)
 
     # 2. キーワードが少なすぎるカテゴリ → 統合または削除を検討
     empty_categories = []
