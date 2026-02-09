@@ -37,6 +37,11 @@ MAX_KEYWORDS_PER_GEN = 50  # 各世代の最大キーワード数（分析後に
 RANDOM_EXPLORE_COUNT = 5  # ランダム探索で試すキーワード数
 HISTORY_DAYS_TO_KEEP = 30  # 保持する履歴日数
 
+# カテゴリ動的管理の設定
+OTHER_CATEGORY_THRESHOLD = 5  # 「その他」がこの数を超えたら新カテゴリを検討
+MIN_CATEGORY_KEYWORDS = 2  # この数未満のカテゴリは統合候補
+AUTO_CATEGORY_MIN_KEYWORDS = 3  # 自動カテゴリ生成に必要な最小キーワード数
+
 # シードキーワード（初回実行時または前回データが少ない場合に使用）
 SEED_KEYWORDS = {
     'genz': ['TikTok', 'VTuber', '原神', 'Apex Legends', 'YOASOBI', 'Ado', 'ChatGPT', 'MBTI', 'メルカリ', '推し活'],
@@ -514,6 +519,126 @@ def categorize_keyword(keyword):
     return 'その他'
 
 
+def extract_common_words(keywords):
+    """キーワード群から共通する単語を抽出"""
+    word_count = {}
+    for kw in keywords:
+        # 日本語の単語を抽出（カタカナ、漢字、英語）
+        words = re.findall(r'[ァ-ヶー]{2,}|[一-龠]{2,}|[A-Za-z]{3,}', kw)
+        for word in words:
+            word_lower = word.lower()
+            if len(word_lower) >= 2:
+                word_count[word_lower] = word_count.get(word_lower, 0) + 1
+
+    # 2回以上出現する単語を返す
+    common = [(w, c) for w, c in word_count.items() if c >= 2]
+    return sorted(common, key=lambda x: x[1], reverse=True)
+
+
+def suggest_category_name(keywords):
+    """キーワード群から適切なカテゴリ名を提案"""
+    common_words = extract_common_words(keywords)
+    if common_words:
+        # 最も頻出する単語をカテゴリ名に
+        return common_words[0][0].capitalize()
+
+    # 共通単語がない場合は最初のキーワードから
+    if keywords:
+        first_kw = keywords[0]
+        words = re.findall(r'[ァ-ヶー]{2,}|[一-龠]{2,}|[A-Za-z]{3,}', first_kw)
+        if words:
+            return words[0]
+
+    return None
+
+
+def analyze_category_health(results):
+    """カテゴリの健全性を分析し、動的に調整"""
+    global CATEGORY_PATTERNS
+
+    # カテゴリ別にキーワードを集計
+    category_keywords = {}
+    other_keywords = []
+
+    for r in results:
+        cat = r.get('category', 'その他')
+        kw = r.get('keyword', '')
+        if cat == 'その他':
+            other_keywords.append(kw)
+        else:
+            if cat not in category_keywords:
+                category_keywords[cat] = []
+            category_keywords[cat].append(kw)
+
+    changes_made = []
+
+    # 1. 「その他」が多すぎる場合 → 新カテゴリを自動生成
+    if len(other_keywords) >= OTHER_CATEGORY_THRESHOLD:
+        print(f"\n  [カテゴリ分析] 「その他」が{len(other_keywords)}件 - 新カテゴリを検討中...")
+
+        # 共通パターンを探す
+        common_words = extract_common_words(other_keywords)
+
+        for word, count in common_words[:3]:  # 上位3つまで検討
+            if count >= AUTO_CATEGORY_MIN_KEYWORDS:
+                # この単語を含むキーワードを抽出
+                matching_keywords = [kw for kw in other_keywords if word.lower() in kw.lower()]
+
+                if len(matching_keywords) >= AUTO_CATEGORY_MIN_KEYWORDS:
+                    # 新カテゴリを生成
+                    new_cat_name = word.capitalize()
+
+                    # 既存カテゴリと重複しないか確認
+                    if new_cat_name not in CATEGORY_PATTERNS:
+                        CATEGORY_PATTERNS[new_cat_name] = matching_keywords.copy()
+                        changes_made.append(f"新カテゴリ「{new_cat_name}」を作成（{len(matching_keywords)}件のキーワード）")
+                        print(f"    → 新カテゴリ「{new_cat_name}」を作成: {matching_keywords[:5]}...")
+
+                        # 対象キーワードのカテゴリを更新
+                        for r in results:
+                            if r.get('keyword', '') in matching_keywords:
+                                r['category'] = new_cat_name
+
+                        # other_keywordsから削除
+                        for kw in matching_keywords:
+                            if kw in other_keywords:
+                                other_keywords.remove(kw)
+
+    # 2. キーワードが少なすぎるカテゴリ → 統合または削除を検討
+    empty_categories = []
+    small_categories = []
+
+    for cat in CATEGORY_PATTERNS.keys():
+        count = len(category_keywords.get(cat, []))
+        if count == 0:
+            empty_categories.append(cat)
+        elif count < MIN_CATEGORY_KEYWORDS:
+            small_categories.append((cat, count))
+
+    if empty_categories:
+        print(f"\n  [カテゴリ分析] 空のカテゴリ: {empty_categories}")
+        # 空のカテゴリは保持（将来のキーワード用）だが、ログに記録
+
+    if small_categories:
+        print(f"  [カテゴリ分析] キーワードが少ないカテゴリ: {small_categories}")
+        # 小さいカテゴリは「ライフスタイル」に統合を検討
+        for cat, count in small_categories:
+            if cat not in ['終活', '介護', '教育']:  # 重要カテゴリは維持
+                keywords_to_merge = category_keywords.get(cat, [])
+                if keywords_to_merge and 'ライフスタイル' in CATEGORY_PATTERNS:
+                    # 統合先にパターンを追加
+                    CATEGORY_PATTERNS['ライフスタイル'].extend(keywords_to_merge)
+                    changes_made.append(f"「{cat}」({count}件)を「ライフスタイル」に統合")
+                    print(f"    → 「{cat}」を「ライフスタイル」に統合")
+
+                    # 対象キーワードのカテゴリを更新
+                    for r in results:
+                        if r.get('category', '') == cat:
+                            r['category'] = 'ライフスタイル'
+
+    return changes_made
+
+
 def fetch_news(keyword):
     """Google Newsから記事数を取得（12週間分）"""
     total = 0
@@ -925,6 +1050,11 @@ def main():
         if results:
             min_score = results[-1]['score']
             print(f"  ボーダーライン: score={min_score}（50位）")
+
+        # カテゴリの動的管理（「その他」が多い場合に新カテゴリを自動生成）
+        category_changes = analyze_category_health(results)
+        if category_changes:
+            print(f"  カテゴリ変更: {len(category_changes)}件")
 
         # KVに保存
         if not results:
