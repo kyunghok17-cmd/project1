@@ -33,8 +33,7 @@ ssl_context.check_hostname = False
 ssl_context.verify_mode = ssl.CERT_NONE
 
 # 設定
-MAX_KEYWORDS_PER_GEN = 50  # 各世代の最大キーワード数
-MAX_INHERITED_KEYWORDS = 40  # 継承キーワードの最大数（上位40件のみ継承、下位は脱落）
+MAX_KEYWORDS_PER_GEN = 50  # 各世代の最大キーワード数（分析後にスコア上位50件を保存）
 MAX_NEW_TRENDS_PER_GEN = 20  # 各世代に追加する新規トレンドの最大数
 RANDOM_EXPLORE_COUNT = 5  # ランダム探索で試すキーワード数
 HISTORY_DAYS_TO_KEEP = 30  # 保持する履歴日数
@@ -609,24 +608,16 @@ def main():
         print(f"  新規トレンド候補: {len(gen_new_trends)}件")
 
         # 分析対象キーワードを構築
+        # 重要: 事前に脱落させず、全て分析してから最終スコアで上位50件を決定
         keywords_to_analyze = []
 
-        # 1. 前回のキーワードをスコア順にソートして上位のみ継承
+        # 1. 前回のキーワードを全て継承（分析後に最終判定）
         inherited_count = 0
-        dropped_count = 0
-        sorted_prev_keywords = sorted(previous_keywords, key=lambda x: x.get('score', 0), reverse=True)
-
-        for prev_kw in sorted_prev_keywords:
+        for prev_kw in previous_keywords:
             kw_name = prev_kw.get('keyword', '')
             prev_score = prev_kw.get('score', 0)
 
             if not kw_name or not kw_name.strip():
-                continue
-
-            # 上位MAX_INHERITED_KEYWORDS件のみ継承（下位は自動脱落）
-            if inherited_count >= MAX_INHERITED_KEYWORDS:
-                dropped_count += 1
-                print(f"  [DROP] {kw_name} (ランキング{inherited_count + dropped_count}位, score={prev_score})")
                 continue
 
             keywords_to_analyze.append({
@@ -636,15 +627,14 @@ def main():
             })
             inherited_count += 1
 
-        print(f"  継承: {inherited_count}件 (上位{MAX_INHERITED_KEYWORDS}位まで), 脱落: {dropped_count}件")
+        print(f"  継承候補: {inherited_count}件（分析後に最終判定）")
 
-        # 2. 新規トレンドを追加（枠が残っている場合）
-        remaining_slots = MAX_KEYWORDS_PER_GEN - len(keywords_to_analyze)
+        # 2. 新規トレンドを追加（重複除外、枠制限なしで候補追加）
         existing_kws = set(k['keyword'].lower() for k in keywords_to_analyze)
 
         new_trends_to_add = []
         for trend in gen_new_trends:
-            if trend.lower() not in existing_kws and len(new_trends_to_add) < remaining_slots:
+            if trend.lower() not in existing_kws:
                 new_trends_to_add.append(trend)
                 existing_kws.add(trend.lower())
 
@@ -658,8 +648,7 @@ def main():
 
         # 3. ランダム探索（埋もれたキーワードを発掘）
         explore_count = 0
-        remaining_slots = MAX_KEYWORDS_PER_GEN - len(keywords_to_analyze)
-        if remaining_slots > 0 and gen in EXPLORE_POOL:
+        if gen in EXPLORE_POOL:
             # 既存キーワードにないものからランダムに選択
             available_explore = [kw for kw in EXPLORE_POOL[gen] if kw.lower() not in existing_kws]
             if available_explore:
@@ -749,12 +738,23 @@ def main():
 
             time.sleep(0.3)
 
-        # スコア順にソート
+        # スコア順にソート（最終判定：全分析結果から上位50件を選出）
         results.sort(key=lambda x: x['score'], reverse=True)
 
-        # 最大数に制限
+        # 最大数に制限＆脱落キーワードを表示
         if len(results) > MAX_KEYWORDS_PER_GEN:
+            dropped_results = results[MAX_KEYWORDS_PER_GEN:]
             results = results[:MAX_KEYWORDS_PER_GEN]
+            print(f"\n  最終選別で脱落: {len(dropped_results)}件")
+            for dr in dropped_results[:10]:  # 上位10件のみ表示
+                print(f"    [DROP] {dr['keyword']} (score={dr['score']})")
+            if len(dropped_results) > 10:
+                print(f"    ... 他{len(dropped_results) - 10}件")
+
+        # 最終ボーダーライン表示
+        if results:
+            min_score = results[-1]['score']
+            print(f"  ボーダーライン: score={min_score}（50位）")
 
         # KVに保存
         if not results:
