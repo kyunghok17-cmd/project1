@@ -34,7 +34,6 @@ ssl_context.verify_mode = ssl.CERT_NONE
 
 # 設定
 MAX_KEYWORDS_PER_GEN = 50  # 各世代の最大キーワード数（分析後にスコア上位50件を保存）
-MAX_NEW_TRENDS_PER_GEN = 20  # 各世代に追加する新規トレンドの最大数
 RANDOM_EXPLORE_COUNT = 5  # ランダム探索で試すキーワード数
 HISTORY_DAYS_TO_KEEP = 30  # 保持する履歴日数
 
@@ -321,7 +320,7 @@ def detect_generation(keyword):
 
 
 def classify_trends_by_generation(trends, existing_keywords_set):
-    """トレンドワードを世代別に分類"""
+    """トレンドワードを世代別に分類（上限なし、最終的にスコアで選別）"""
     classified = {gen: [] for gen in GENERATION_PATTERNS.keys()}
 
     for trend in trends:
@@ -331,7 +330,7 @@ def classify_trends_by_generation(trends, existing_keywords_set):
 
         # 世代を判定
         gen = detect_generation(trend)
-        if gen and len(classified[gen]) < MAX_NEW_TRENDS_PER_GEN:
+        if gen:
             classified[gen].append(trend)
 
     return classified
