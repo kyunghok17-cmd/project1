@@ -492,31 +492,47 @@ def suggest_category_name(keywords):
 
 def guess_category_by_pattern(keyword):
     """キーワードのパターンからカテゴリを推測"""
-    # 人名・タレント関連のパターン
-    celebrity_patterns = ['배우', '가수', '아이돌', '코미디언', '개그맨', 'MC', '아나운서', '모델', '감독', '작가', '연예인']
-    # 地域・場所関連
-    location_patterns = ['지역', '도', '시', '구', '군', '읍', '역', '공항', '국', '반도']
-    # テクノロジー・企業関連
-    tech_patterns = ['Google', 'Apple', 'Microsoft', 'Amazon', 'Meta', 'Facebook', 'OpenAI', 'Anthropic',
-                     'React', 'Python', 'Java', 'API', 'SDK', '삼성', 'LG', '카카오', '네이버', 'AI']
+    # 除外ワード（これらは人名ではない）
+    non_person_words = [
+        '정년', '보험', '연금', '자금', '증여', '상속', '간병', '의료', '수술', '검진',
+        '증상', '치료', '장애', '녹내장', '백내장', '당뇨', '고혈압', '대출', '주택',
+        '투자', '주식', '퇴직', '종신', '노후', '생전', '유산', '시설', '병원', '센터',
+        '학원', '학교', '대학', '입시', '수능', '공무원'
+    ]
 
-    keyword_lower = keyword.lower()
+    # 除外チェック
+    for word in non_person_words:
+        if word in keyword:
+            return None
 
-    for pattern in celebrity_patterns:
-        if pattern.lower() in keyword_lower or keyword_lower in pattern.lower():
+    # 人名・タレント関連のパターン（職業名を含む場合のみ）
+    celebrity_job_patterns = ['배우', '가수', '아이돌', '코미디언', '개그맨', 'MC', '아나운서', '모델', '감독', '작가']
+
+    for pattern in celebrity_job_patterns:
+        if pattern in keyword:
             return '연예・유명인'
 
-    for pattern in location_patterns:
+    # 地域・場所関連（より厳密なパターン）
+    location_suffix_patterns = ['지역', '반도', '공항', '특별시', '광역시', '도청']
+    for pattern in location_suffix_patterns:
         if pattern in keyword:
             return '지역・장소'
 
+    # 「〇〇시」「〇〇군」「〇〇구」の形式（末尾にある場合のみ、2文字以上の地名）
+    if re.search(r'.{2,}[시군구]$', keyword) and len(keyword) >= 3:
+        return '지역・장소'
+
+    # テクノロジー・企業関連
+    tech_patterns = ['Google', 'Apple', 'Microsoft', 'Amazon', 'Meta', 'Facebook', 'OpenAI', 'Anthropic',
+                     'React', 'Python', 'Java', 'API', 'SDK', 'DeepSeek', 'Claude', 'Gemini', 'GPT', 'LLM']
+
+    keyword_lower = keyword.lower()
     for pattern in tech_patterns:
-        if pattern.lower() in keyword_lower or keyword_lower == pattern.lower():
+        if pattern.lower() == keyword_lower or pattern.lower() in keyword_lower:
             return '테크놀로지'
 
-    # 韓国人名っぽいパターン（ハングル2-4文字）
-    if re.match(r'^[가-힣]+$', keyword) and 2 <= len(keyword) <= 4:
-        return '연예・유명인'
+    # 人名の推測は無効化（誤検出が多いため）
+    # 韓国の人名は通常3文字だが、一般名詞と区別が困難なため推測しない
 
     return None
 

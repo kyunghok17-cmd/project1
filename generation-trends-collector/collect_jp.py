@@ -554,33 +554,52 @@ def suggest_category_name(keywords):
 
 def guess_category_by_pattern(keyword):
     """キーワードのパターンからカテゴリを推測"""
-    # 人名・タレント関連のパターン
-    celebrity_patterns = ['俳優', '女優', '芸人', 'タレント', 'アナウンサー', 'モデル', '歌手', 'アイドル', '監督', '作家', '芸能']
-    # 地域・場所関連
-    location_patterns = ['地方', '県', '市', '区', '町', '村', '駅', '空港', '国', '半島', '列島']
-    # テクノロジー・企業関連
-    tech_patterns = ['Google', 'Apple', 'Microsoft', 'Amazon', 'Meta', 'Facebook', 'OpenAI', 'Anthropic',
-                     'React', 'Python', 'Java', 'API', 'SDK', 'HDMI', 'USB', 'Bluetooth', 'Wi-Fi', 'AI']
+    # 除外ワード（これらは人名ではない）
+    non_person_words = [
+        '定年', '保険', '年金', '資金', '贈与', '相続', '介護', '医療', '手術', '検診',
+        '症状', '治療', '障害', '緑内障', '白内障', '糖尿', '高血圧', 'ローン', '住宅',
+        '投資', '株式', '退職', '終身', '老後', '生前', '遺産', '施設', '病院', 'センター'
+    ]
 
-    keyword_lower = keyword.lower()
+    # 除外チェック
+    for word in non_person_words:
+        if word in keyword:
+            return None
 
-    for pattern in celebrity_patterns:
-        if pattern.lower() in keyword_lower or keyword_lower in pattern.lower():
+    # 人名・タレント関連のパターン（職業名を含む場合のみ）
+    celebrity_job_patterns = ['俳優', '女優', '芸人', 'タレント', 'アナウンサー', 'モデル', '歌手', 'アイドル', '監督', '作家']
+
+    for pattern in celebrity_job_patterns:
+        if pattern in keyword:
             return '芸能・有名人'
 
-    for pattern in location_patterns:
-        if pattern in keyword:  # 日本語はlower不要
+    # 地域・場所関連（より厳密なパターン）
+    # 「○○県」「○○市」「○○駅」など、地名の形式に合致するもの
+    location_suffix_patterns = ['都道府県', '地方', '半島', '列島', '空港']
+    for pattern in location_suffix_patterns:
+        if pattern in keyword:
             return '地域・場所'
 
+    # 「〇〇県」「〇〇市」「〇〇区」の形式（末尾にある場合のみ）
+    if re.search(r'.+[県市区町]$', keyword) and len(keyword) >= 3:
+        return '地域・場所'
+
+    # テクノロジー・企業関連
+    tech_patterns = ['Google', 'Apple', 'Microsoft', 'Amazon', 'Meta', 'Facebook', 'OpenAI', 'Anthropic',
+                     'React', 'Python', 'Java', 'API', 'SDK', 'HDMI', 'USB', 'Bluetooth', 'Wi-Fi',
+                     'DeepSeek', 'Claude', 'Gemini', 'GPT', 'LLM', 'ドワンゴ', 'ニコニコ']
+
+    keyword_lower = keyword.lower()
     for pattern in tech_patterns:
-        if pattern.lower() in keyword_lower or keyword_lower == pattern.lower():
+        if pattern.lower() == keyword_lower or pattern.lower() in keyword_lower:
             return 'テクノロジー'
 
-    # 人名っぽいパターン（カタカナ + ひらがな/漢字の組み合わせ）
-    if re.match(r'^[一-龠ぁ-んァ-ヶー]+$', keyword) and len(keyword) >= 3 and len(keyword) <= 6:
-        # 漢字2-4文字は人名の可能性が高い
-        kanji_only = re.sub(r'[^一-龠]', '', keyword)
-        if 2 <= len(kanji_only) <= 4:
+    # 人名の推測は無効化（誤検出が多いため）
+    # 代わりに、カタカナのみで構成される3-6文字は人名の可能性がある
+    if re.match(r'^[ァ-ヶー]{3,6}$', keyword):
+        # 外来語っぽいものは除外
+        foreign_words = ['サービス', 'システム', 'センター', 'メディア', 'データ', 'ネット', 'アプリ']
+        if not any(fw in keyword for fw in foreign_words):
             return '芸能・有名人'
 
     return None
