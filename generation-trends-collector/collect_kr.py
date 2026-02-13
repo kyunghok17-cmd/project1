@@ -491,13 +491,14 @@ def suggest_category_name(keywords):
 
 
 def guess_category_by_pattern(keyword):
-    """キーワードのパターンからカテゴリを推測"""
+    """キーワードのパターンからカテゴリを推測（拡張版）"""
+
     # 除外ワード（これらは人名ではない）
     non_person_words = [
         '정년', '보험', '연금', '자금', '증여', '상속', '간병', '의료', '수술', '검진',
         '증상', '치료', '장애', '녹내장', '백내장', '당뇨', '고혈압', '대출', '주택',
         '투자', '주식', '퇴직', '종신', '노후', '생전', '유산', '시설', '병원', '센터',
-        '학원', '학교', '대학', '입시', '수능', '공무원'
+        '학원', '학교', '대학', '입시', '수능', '공무원', '지역', '반도', '협회', '연맹', '기구', '위원회'
     ]
 
     # 除外チェック
@@ -505,34 +506,74 @@ def guess_category_by_pattern(keyword):
         if word in keyword:
             return None
 
-    # 人名・タレント関連のパターン（職業名を含む場合のみ）
-    celebrity_job_patterns = ['배우', '가수', '아이돌', '코미디언', '개그맨', 'MC', '아나운서', '모델', '감독', '작가']
+    keyword_lower = keyword.lower()
 
+    # 1. テクノロジー・企業関連
+    tech_companies = [
+        'google', 'apple', 'microsoft', 'amazon', 'meta', 'facebook', 'nvidia', 'intel', 'amd',
+        'ibm', 'oracle', 'salesforce', 'adobe', 'netflix', 'spotify', 'twitter',
+        'openai', 'anthropic', 'deepseek', 'cloudflare', 'tesla', 'spacex', 'uber', 'airbnb',
+        'samsung', '삼성', 'lg', 'sk', '현대', 'hyundai', 'kia', '기아', '네이버', 'naver', '카카오', 'kakao',
+        '쿠팡', 'coupang', '배민', '배달의민족', '토스', 'toss', '라인', 'line',
+        'gpt', 'claude', 'gemini', 'llm', 'chatgpt', 'react', 'python', 'javascript'
+    ]
+    for pattern in tech_companies:
+        if pattern in keyword_lower:
+            return '테크놀로지'
+
+    # 2. 음악・엔터테인먼트 그룹명
+    music_groups = [
+        'bts', '방탄', 'blackpink', '블랙핑크', 'twice', '트와이스', 'exo', '엑소',
+        'nct', '엔시티', 'seventeen', '세븐틴', 'itzy', '있지', 'aespa', '에스파',
+        'ive', '아이브', 'stray kids', '스트레이키즈', 'newjeans', '뉴진스',
+        'le sserafim', '르세라핌', 'txt', '투모로우바이투게더',
+        '빅뱅', 'bigbang', '2ne1', '투애니원', '소녀시대', 'snsd', '슈퍼주니어', 'super junior',
+        '원더걸스', 'wonder girls', '카라', 'kara', '샤이니', 'shinee',
+        'wwe', '프로레슬링', '격투기', 'ufc'
+    ]
+    for pattern in music_groups:
+        if pattern in keyword_lower:
+            return '음악・엔터'
+
+    # 3. 스포츠 관련
+    sports_keywords = [
+        '프로레슬링', '야구', '축구', '농구', '배구', '테니스', '골프', '스노보드', '스케이트보드',
+        '씨름', '유도', '가라테', '검도', '복싱', '격투기', '올림픽', 'kbo', 'k리그', 'kbl', 'v리그'
+    ]
+    for pattern in sports_keywords:
+        if pattern in keyword_lower:
+            return '스포츠'
+
+    # 4. 人名・タレント関連のパターン（職業名を含む場合）
+    celebrity_job_patterns = ['배우', '가수', '아이돌', '코미디언', '개그맨', 'MC', '아나운서', '모델', '감독', '작가']
     for pattern in celebrity_job_patterns:
         if pattern in keyword:
             return '연예・유명인'
 
-    # 地域・場所関連（より厳密なパターン）
+    # 5. 地域・場所関連
     location_suffix_patterns = ['지역', '반도', '공항', '특별시', '광역시', '도청']
     for pattern in location_suffix_patterns:
         if pattern in keyword:
             return '지역・장소'
 
-    # 「〇〇시」「〇〇군」「〇〇구」の形式（末尾にある場合のみ、2文字以上の地名）
+    # 「〇〇시」「〇〇군」「〇〇구」の形式（末尾にある場合のみ）
     if re.search(r'.{2,}[시군구]$', keyword) and len(keyword) >= 3:
         return '지역・장소'
 
-    # テクノロジー・企業関連
-    tech_patterns = ['Google', 'Apple', 'Microsoft', 'Amazon', 'Meta', 'Facebook', 'OpenAI', 'Anthropic',
-                     'React', 'Python', 'Java', 'API', 'SDK', 'DeepSeek', 'Claude', 'Gemini', 'GPT', 'LLM']
-
-    keyword_lower = keyword.lower()
-    for pattern in tech_patterns:
-        if pattern.lower() == keyword_lower or pattern.lower() in keyword_lower:
-            return '테크놀로지'
-
-    # 人名の推測は無効化（誤検出が多いため）
-    # 韓国の人名は通常3文字だが、一般名詞と区別が困難なため推測しない
+    # 6. 韓国の人名パターン（ハングル2-4文字）
+    # 韓国の人名は通常3文字だが、2-4文字もある
+    if re.match(r'^[가-힣]{2,4}$', keyword):
+        # 一般名詞・組織名は除外
+        org_suffixes = ['회사', '협회', '연맹', '기구', '위원회', '학교', '대학', '학원', '병원', '센터']
+        if not any(keyword.endswith(suffix) for suffix in org_suffixes):
+            # 数字を含むものは除外
+            if not re.search(r'[0-9０-９]', keyword):
+                # 一般名詞は除外
+                common_nouns = ['신문', '잡지', '방송', '통신', '전기', '전자', '기계', '산업', '공업', '상업', '농업']
+                if not any(noun in keyword for noun in common_nouns):
+                    # 3文字の典型的な人名パターン
+                    if len(keyword) == 3:
+                        return '연예・유명인'
 
     return None
 

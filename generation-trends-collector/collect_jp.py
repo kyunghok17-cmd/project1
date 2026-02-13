@@ -553,12 +553,14 @@ def suggest_category_name(keywords):
 
 
 def guess_category_by_pattern(keyword):
-    """キーワードのパターンからカテゴリを推測"""
+    """キーワードのパターンからカテゴリを推測（拡張版）"""
+
     # 除外ワード（これらは人名ではない）
     non_person_words = [
         '定年', '保険', '年金', '資金', '贈与', '相続', '介護', '医療', '手術', '検診',
         '症状', '治療', '障害', '緑内障', '白内障', '糖尿', '高血圧', 'ローン', '住宅',
-        '投資', '株式', '退職', '終身', '老後', '生前', '遺産', '施設', '病院', 'センター'
+        '投資', '株式', '退職', '終身', '老後', '生前', '遺産', '施設', '病院', 'センター',
+        '都道府県', '地方', '半島', '協会', '連盟', '機構', '委員会', '株式会社'
     ]
 
     # 除外チェック
@@ -566,15 +568,48 @@ def guess_category_by_pattern(keyword):
         if word in keyword:
             return None
 
-    # 人名・タレント関連のパターン（職業名を含む場合のみ）
-    celebrity_job_patterns = ['俳優', '女優', '芸人', 'タレント', 'アナウンサー', 'モデル', '歌手', 'アイドル', '監督', '作家']
+    keyword_lower = keyword.lower()
 
+    # 1. テクノロジー・企業関連（大文字企業名を含む）
+    tech_companies = [
+        'google', 'apple', 'microsoft', 'amazon', 'meta', 'facebook', 'nvidia', 'intel', 'amd',
+        'ibm', 'oracle', 'salesforce', 'adobe', 'netflix', 'spotify', 'twitter', 'x ',
+        'openai', 'anthropic', 'deepseek', 'cloudflare', 'tesla', 'spacex', 'uber', 'airbnb',
+        'samsung', 'lg', 'sony', 'panasonic', 'toshiba', 'hitachi', 'fujitsu', 'nec', 'sharp',
+        '東芝', 'ソニー', 'パナソニック', '日立', '富士通', 'シャープ', '任天堂', 'トヨタ', 'ホンダ',
+        'gpt', 'claude', 'gemini', 'llm', 'chatgpt', 'react', 'python', 'javascript'
+    ]
+    for pattern in tech_companies:
+        if pattern in keyword_lower:
+            return 'テクノロジー'
+
+    # 2. 音楽・エンタメ関連のグループ名
+    music_groups = [
+        'tokio', 'smap', 'arashi', '嵐', 'twice', 'bts', 'blackpink', 'perfume',
+        'exo', 'nct', 'seventeen', 'itzy', 'aespa', 'ive', 'stray kids',
+        'akb', 'ske', 'nmb', 'hkt', 'ngt', '乃木坂', '櫻坂', '日向坂', 'keyakizaka',
+        '新日本プロレス', 'njpw', 'wwe', 'プロレス'
+    ]
+    for pattern in music_groups:
+        if pattern in keyword_lower:
+            return '音楽・エンタメ'
+
+    # 3. スポーツ関連
+    sports_keywords = [
+        'プロレス', '野球', 'サッカー', 'バスケ', 'テニス', 'ゴルフ', 'スノボ', 'スケボー',
+        '相撲', '柔道', '空手', '剣道', 'ボクシング', '格闘技', 'オリンピック'
+    ]
+    for pattern in sports_keywords:
+        if pattern in keyword:
+            return 'スポーツ'
+
+    # 4. 人名・タレント関連のパターン（職業名を含む場合）
+    celebrity_job_patterns = ['俳優', '女優', '芸人', 'タレント', 'アナウンサー', 'モデル', '歌手', 'アイドル', '監督', '作家']
     for pattern in celebrity_job_patterns:
         if pattern in keyword:
             return '芸能・有名人'
 
-    # 地域・場所関連（より厳密なパターン）
-    # 「○○県」「○○市」「○○駅」など、地名の形式に合致するもの
+    # 5. 地域・場所関連（より厳密なパターン）
     location_suffix_patterns = ['都道府県', '地方', '半島', '列島', '空港']
     for pattern in location_suffix_patterns:
         if pattern in keyword:
@@ -584,23 +619,36 @@ def guess_category_by_pattern(keyword):
     if re.search(r'.+[県市区町]$', keyword) and len(keyword) >= 3:
         return '地域・場所'
 
-    # テクノロジー・企業関連
-    tech_patterns = ['Google', 'Apple', 'Microsoft', 'Amazon', 'Meta', 'Facebook', 'OpenAI', 'Anthropic',
-                     'React', 'Python', 'Java', 'API', 'SDK', 'HDMI', 'USB', 'Bluetooth', 'Wi-Fi',
-                     'DeepSeek', 'Claude', 'Gemini', 'GPT', 'LLM', 'ドワンゴ', 'ニコニコ']
+    # 6. 日本の人名パターン（漢字2-4文字で「姓+名」の構造）
+    # 人名の可能性が高いパターンをチェック
+    if re.match(r'^[一-龠]{2,4}$', keyword):
+        # 企業・組織名っぽいものは除外
+        org_suffixes = ['社', '堂', '屋', '館', '庵', '園', '塾', '院', '寺', '神社', '会', '団']
+        if not any(keyword.endswith(suffix) for suffix in org_suffixes):
+            # 数字を含むものは除外
+            if not re.search(r'[0-9０-９]', keyword):
+                # 一般名詞っぽいものは除外
+                common_nouns = ['新聞', '雑誌', '放送', '通信', '電気', '電子', '機械', '産業', '工業', '商業', '農業']
+                if not any(noun in keyword for noun in common_nouns):
+                    return '芸能・有名人'
 
-    keyword_lower = keyword.lower()
-    for pattern in tech_patterns:
-        if pattern.lower() == keyword_lower or pattern.lower() in keyword_lower:
-            return 'テクノロジー'
-
-    # 人名の推測は無効化（誤検出が多いため）
-    # 代わりに、カタカナのみで構成される3-6文字は人名の可能性がある
+    # 7. カタカナのみで構成される3-6文字は人名の可能性がある
     if re.match(r'^[ァ-ヶー]{3,6}$', keyword):
         # 外来語っぽいものは除外
-        foreign_words = ['サービス', 'システム', 'センター', 'メディア', 'データ', 'ネット', 'アプリ']
+        foreign_words = ['サービス', 'システム', 'センター', 'メディア', 'データ', 'ネット', 'アプリ',
+                        'エンジン', 'プログラム', 'コンテンツ', 'プロジェクト', 'マネジメント', 'ビジネス',
+                        'オフィス', 'スタジオ', 'ファクトリー', 'インター', 'エンター']
         if not any(fw in keyword for fw in foreign_words):
             return '芸能・有名人'
+
+    # 8. 「○○+名」「○○+子」「○○+奈」などの人名パターン
+    name_endings = ['太郎', '次郎', '三郎', '郎', '夫', '男', '雄', '彦', '平', '介', '助', '輔', '亮', '翔',
+                    '子', '美', '奈', '菜', '花', '香', '恵', '江', '代', '世', '紀', '里', '莉', '理']
+    for ending in name_endings:
+        if keyword.endswith(ending) and len(keyword) >= 2:
+            # 組織名は除外
+            if not any(keyword.endswith(suffix) for suffix in ['会社', '協会', '連盟']):
+                return '芸能・有名人'
 
     return None
 
